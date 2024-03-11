@@ -1,16 +1,34 @@
-use clap::Parser;
+mod actions;
 
-#[derive(Parser, Debug)] // requires `derive` feature
-#[command(term_width = 0)] // Just to make testing across clap features easier
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+#[command(propagate_version = true)]
 pub struct Args {
-    #[arg(
-        short,
-        default_value_t = String::from("display"),
-        value_parser = clap::builder::PossibleValuesParser::new(["display", "add"]),
-    )]
-    pub action: String,
-    #[arg(short, default_value = None)]
-    pub month: Option<u32>,
-    #[arg(short, default_value = None)]
-    pub day: Option<u32>,
+    #[command(subcommand)]
+    pub action: Option<Commands>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum Mode {
+    Q,
+    Month,
+    Year,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    Add { month: u32, day: u32 },
+    Display { mode: Option<Mode> },
+}
+
+impl Args {
+    pub fn invoke(&self) {
+        match self.action {
+            Some(Commands::Display { mode: Some(mode) }) => actions::display(mode),
+            Some(Commands::Display { mode: None }) | None => actions::display(Mode::Month),
+            Some(Commands::Add { day, month }) => actions::add(day, month),
+        }
+    }
 }

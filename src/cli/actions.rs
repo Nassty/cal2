@@ -45,3 +45,12 @@ pub fn add(day: u32, month: u32) {
     save(&fname, &hm);
     println!("OK");
 }
+
+pub fn delete(day: u32, month: u32) {
+    let now = chrono::Utc::now();
+    let fname = get_filename(now.year());
+    let mut hm = load(&fname).unwrap();
+    hm.remove(&(day, month));
+    save(&fname, &hm);
+    println!("OK");
+}

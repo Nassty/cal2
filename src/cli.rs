@@ -19,15 +19,17 @@ pub enum Mode {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    Add { month: u32, day: u32 },
+    Add { day: u32, month: u32 },
     Display { mode: Option<Mode> },
+    Delete { day: u32, month: u32 },
 }
 
 impl Args {
     pub fn invoke(&self) {
         match self.action {
+            Some(Commands::Delete { day, month }) => actions::delete(day, month),
             Some(Commands::Display { mode: Some(mode) }) => actions::display(mode),
-            Some(Commands::Display { mode: None }) | None => actions::display(Mode::Month),
+            Some(Commands::Display { mode: None }) | None => actions::display(Mode::Q),
             Some(Commands::Add { day, month }) => actions::add(day, month),
         }
     }

@@ -1,0 +1,32 @@
+NAME
+     cal2 – displays a calendar with colored holidays and weekends
+
+SYNOPSIS
+    cal [-Vh]
+    cal add [-vH] [day] [month]
+    cal delete [-vH] [day] [month]
+    cal display [month|year|q]
+    cal help
+
+DESCRIPTION
+
+  The cal2 utility (inspired in the cal(1)) displays a simple but colored calendar based on holidays and weekends.
+
+  The options and subcommands are as follows:
+
+  -V                      displays the command version
+
+  -h | help               displays the help given for the commands and subcommands
+
+  add <day> <month>       adds <day>/<month> to the internal list of holidays
+
+  delete <day> <month>    deletes <day>/<month> from the internal list of holidays
+  
+
+SEE ALSO
+     cal(1)
+
+HISTORY
+     A cal command appeared in Version 5 AT&T UNIX.  The ncal command appeared in FreeBSD 2.2.6.
+
+

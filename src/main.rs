@@ -1,3 +1,4 @@
+use prettytable::{format, Cell, Row, Table};
 use std::collections::HashMap;
 
 mod display_month;
@@ -16,9 +17,27 @@ fn main() {
             let now = chrono::Utc::now();
             let hm = get_holidays(now.year());
             let dm = display_month::DisplayMonth::new(now.month(), now.year(), &hm);
-            dm.prev().display();
-            dm.display();
-            dm.next().display();
+            let mut cals = Vec::new();
+            cals.push(dm.prev());
+            cals.push(dm.clone());
+            cals.push(dm.next());
+            let mut table = Table::new();
+            let format = format::FormatBuilder::new().padding(0, 0).build();
+            table.set_format(format);
+
+            table.add_row(Row::new(
+                cals.iter()
+                    .map(|x| {
+                        let mut c = Cell::new(&x.month_name);
+                        c.align(format::Alignment::CENTER);
+                        c
+                    })
+                    .collect(),
+            ));
+            table.add_row(Row::new(
+                cals.iter().map(|x| Cell::new(&x.format())).collect(),
+            ));
+            table.printstd();
         }
         "add" => match (day, month) {
             (Some(day), Some(month)) => {

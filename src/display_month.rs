@@ -1,11 +1,13 @@
-use ascii_table::{Align, AsciiTable};
 use chrono::{Datelike, Month, NaiveDate, Weekday};
 use colored::Colorize;
+use prettytable::{format, Cell, Row, Table};
 
 use crate::HM;
 
+#[derive(Clone)]
 pub struct DisplayMonth<'a> {
     pub month: u32,
+    pub month_name: String,
     pub year: i32,
     first_day: NaiveDate,
     last_day: NaiveDate,
@@ -19,11 +21,14 @@ impl<'a> DisplayMonth<'a> {
             .unwrap_or(NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap())
             .pred_opt()
             .unwrap();
+        let k = Month::try_from(month as u8).unwrap();
+        let month_name = format!("{} {}", k.name(), year);
         Self {
             month,
             year,
             first_day,
             last_day,
+            month_name,
             hm,
         }
     }
@@ -46,44 +51,58 @@ impl<'a> DisplayMonth<'a> {
         Self::new(prev_month, year, self.hm)
     }
     pub fn get_matrix(&self) -> Vec<Vec<String>> {
+        let today = chrono::Utc::now().naive_local().date();
         let mut curr_day = self.first_day;
         let first_index = self.first_day.weekday().number_from_monday();
+        let weekends = [Weekday::Sat, Weekday::Sun];
         (1..self.last_day.day() + first_index)
             .map(|i| {
                 if i < first_index {
-                    return "".into();
+                    return None;
                 }
 
                 let cr = curr_day;
                 curr_day = curr_day.succ_opt().unwrap();
-
                 let day = cr.day();
                 let is_holiday = *self.hm.get(&(day, self.month)).unwrap_or(&false);
-                if is_holiday || cr.weekday() == Weekday::Sun || cr.weekday() == Weekday::Sat {
-                    return day.to_string().red().to_string();
-                } else if cr == chrono::Utc::now().naive_local().date() {
-                    return day.to_string().black().on_white().to_string();
-                } else {
-                    return day.to_string();
+                Some((cr, is_holiday))
+            })
+            .map(|x| match x {
+                Some((cr, _)) if cr == today => cr.day().to_string().black().on_white().to_string(),
+
+                Some((cr, _)) if weekends.contains(&cr.weekday()) => {
+                    cr.day().to_string().green().to_string()
                 }
+                Some((cr, true)) => cr.day().to_string().red().to_string(),
+                Some((cr, false)) => cr.day().to_string(),
+                None => "".to_string(),
             })
             .collect::<Vec<_>>()
             .chunks(7)
             .map(|x| x.to_vec())
             .collect()
     }
-    pub fn display(&self) {
-        let k = Month::try_from(self.month as u8).unwrap();
-        println!("{} {}", k.name(), self.year);
-        let mut ascii_table = AsciiTable::default();
+    pub fn format(&self) -> String {
+        let mut table = Table::new();
+        let format = format::FormatBuilder::new()
+            .column_separator(' ')
+            .borders(' ')
+            .separators(
+                &[format::LinePosition::Top, format::LinePosition::Bottom],
+                format::LineSeparator::new(' ', ' ', ' ', ' '),
+            )
+            .padding(0, 0)
+            .build();
+        table.set_format(format);
+        table.add_row(Row::new(
+            (0..7)
+                .map(|i| Cell::new(&Weekday::try_from(i).unwrap().to_string()[0..2].to_string()))
+                .collect(),
+        ));
+        self.get_matrix().iter().for_each(|x| {
+            table.add_row(Row::new(x.iter().map(|y: &String| Cell::new(&y)).collect()));
+        });
 
-        for i in 0..7 {
-            let day = Weekday::try_from(i).unwrap();
-            ascii_table
-                .column(i as usize)
-                .set_header(day.to_string()[0..2].to_string())
-                .set_align(Align::Center);
-        }
-        ascii_table.print(self.get_matrix());
+        table.to_string()
     }
 }

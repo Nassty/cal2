@@ -10,8 +10,7 @@ use crate::HM;
 
 #[derive(Debug, Deserialize)]
 struct Resp {
-    dia: u32,
-    mes: u32,
+    fecha: String,
 }
 
 pub fn get_filename(year: i32) -> String {
@@ -19,7 +18,7 @@ pub fn get_filename(year: i32) -> String {
 }
 
 pub fn load(fname: &String) -> Result<HM, ()> {
-    let cache = File::open(&fname);
+    let cache = File::open(fname);
     match cache {
         Ok(reader) => match bincode::deserialize_from::<File, HM>(reader) {
             Ok(resp) => Ok(resp),
@@ -29,7 +28,7 @@ pub fn load(fname: &String) -> Result<HM, ()> {
     }
 }
 pub fn save(fname: &String, hm: &HM) {
-    let file = File::create(&fname).unwrap();
+    let file = File::create(fname).unwrap();
     let mut writer = BufWriter::new(file);
     bincode::serialize_into(&mut writer, hm).unwrap();
     writer.flush().unwrap();
@@ -37,22 +36,21 @@ pub fn save(fname: &String, hm: &HM) {
 
 pub fn get_holidays(year: i32) -> HM {
     let fname = get_filename(year);
-    match load(&fname) {
-        Ok(hm) => {
-            return hm;
-        }
-        Err(_) => {}
+    if let Ok(hm) = load(&fname) {
+        return hm;
     }
-    let data = reqwest::blocking::get(format!(
-        "https://nolaborables.com.ar/api/v2/feriados/{year}"
-    ))
-    .unwrap()
-    .text()
-    .unwrap();
+    let data = reqwest::blocking::get(format!("https://api.argentinadatos.com/v1/feriados/{year}"))
+        .unwrap()
+        .text()
+        .unwrap();
     let v: Vec<Resp> = serde_json::from_str(&data).unwrap();
     let mut hm = HashMap::new();
-    for day in v {
-        let k = (day.dia, day.mes);
+    for hday in v {
+        let mut fecha = hday.fecha.splitn(3, '-');
+        fecha.next();
+        let month: u32 = fecha.next().unwrap().parse().unwrap();
+        let day: u32 = fecha.next().unwrap().parse().unwrap();
+        let k = (day, month);
         let v = true;
         hm.insert(k, v);
     }

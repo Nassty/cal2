@@ -29,9 +29,9 @@ jobs:
             apt-packages: "gcc-multilib libc6-dev-i386 pkg-config"
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            use-cross: true
+            use-cross: false
             artifact-extension: ""
-            apt-packages: "gcc-multilib libc6-dev-i386 pkg-config"
+            apt-packages: "gcc-multilib libc6-dev-i386 pkg-config qemu-user-static binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu"
           - os: macos-latest
             target: x86_64-apple-darwin
             use-cross: false
@@ -72,6 +72,8 @@ jobs:
 
       - name: Build (native)
         if: matrix.use-cross != 'true'
+        env:
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare artifact

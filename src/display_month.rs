@@ -1,8 +1,10 @@
-use chrono::{Datelike, Month, NaiveDate, Weekday};
+use crate::{
+    HM,
+    error::{CalError, Result},
+};
+use chrono::{self, Datelike, Days, Month, NaiveDate, Weekday};
 use colored::Colorize;
 use prettytable::{Cell, Row, Table, format};
-
-use crate::HM;
 
 #[derive(Clone)]
 pub struct DisplayMonth<'a> {
@@ -15,25 +17,28 @@ pub struct DisplayMonth<'a> {
 }
 
 impl<'a> DisplayMonth<'a> {
-    pub fn new(month: u32, year: i32, hm: &'a HM) -> Self {
-        let first_day = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+    pub fn new(month: u32, year: i32, hm: &'a HM) -> Result<Self> {
+        let first_day = NaiveDate::from_ymd_opt(year, month, 1)
+            .ok_or_else(|| CalError::InvalidDate(format!("invalid month {month}")))?;
         let last_day = NaiveDate::from_ymd_opt(year, month + 1, 1)
-            .unwrap_or_else(|| NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap())
-            .pred_opt()
-            .unwrap();
-        let k = Month::try_from(month as u8).unwrap();
-        let month_name = format!("{} {}", k.name(), year);
-        Self {
+            .or_else(|| NaiveDate::from_ymd_opt(year + 1, 1, 1))
+            .and_then(|d| d.pred_opt())
+            .ok_or_else(|| CalError::InvalidDate(format!("invalid month {month}")))?;
+        let month_name = Month::try_from(month as u8)
+            .map(|m| format!("{} {year}", m.name()))
+            .map_err(|_| CalError::InvalidDate(format!("invalid month {month}")))?;
+
+        Ok(Self {
             month,
             year,
             first_day,
             last_day,
             month_name,
             hm,
-        }
+        })
     }
 
-    pub fn next(&self) -> Self {
+    pub fn next(&self) -> Result<Self> {
         let next_month = (self.month % 12) + 1;
         let year = if next_month > self.month {
             self.year
@@ -43,7 +48,7 @@ impl<'a> DisplayMonth<'a> {
         Self::new(next_month, year, self.hm)
     }
 
-    pub fn prev(&self) -> Self {
+    pub fn prev(&self) -> Result<Self> {
         let prev_month = if self.month == 1 { 12 } else { self.month - 1 };
         let year = if prev_month < self.month {
             self.year
@@ -65,7 +70,9 @@ impl<'a> DisplayMonth<'a> {
                 }
 
                 let cr = curr_day;
-                curr_day = curr_day.succ_opt().unwrap();
+                if let Some(next_day) = curr_day.checked_add_days(Days::new(1)) {
+                    curr_day = next_day;
+                }
                 let day = cr.day();
                 let is_holiday = self.hm.contains_key(&(day, self.month));
                 Some((cr, is_holiday))
@@ -77,7 +84,7 @@ impl<'a> DisplayMonth<'a> {
                 }
                 Some((cr, true)) => cr.day().to_string().red().to_string(),
                 Some((cr, false)) => cr.day().to_string(),
-                None => "".to_string(),
+                None => String::new(),
             })
             .collect::<Vec<_>>()
             .chunks(7)
@@ -86,6 +93,7 @@ impl<'a> DisplayMonth<'a> {
     }
 
     pub fn format(&self) -> String {
+        const WEEKDAYS: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
         let mut table = Table::new();
         let format = format::FormatBuilder::new()
             .column_separator(' ')
@@ -98,9 +106,10 @@ impl<'a> DisplayMonth<'a> {
             .build();
         table.set_format(format);
         table.add_row(Row::new(
-            (0..7)
-                .map(|i| Cell::new(&Weekday::try_from(i).unwrap().to_string()[0..2]))
-                .collect(),
+            WEEKDAYS
+                .iter()
+                .map(|label| Cell::new(label))
+                .collect::<Vec<_>>(),
         ));
         self.get_matrix().iter().for_each(|x| {
             table.add_row(Row::new(x.iter().map(|y: &String| Cell::new(y)).collect()));
@@ -134,8 +143,8 @@ mod tests {
     #[test]
     fn prev_from_january_wraps_to_december_previous_year() {
         let hm = HashMap::new();
-        let dm = DisplayMonth::new(1, 2024, &hm);
-        let prev = dm.prev();
+        let dm = DisplayMonth::new(1, 2024, &hm).expect("valid display month");
+        let prev = dm.prev().expect("previous month available");
 
         assert_eq!(prev.month, 12);
         assert_eq!(prev.year, 2023);
@@ -144,8 +153,8 @@ mod tests {
     #[test]
     fn next_from_december_wraps_to_january_next_year() {
         let hm = HashMap::new();
-        let dm = DisplayMonth::new(12, 2023, &hm);
-        let next = dm.next();
+        let dm = DisplayMonth::new(12, 2023, &hm).expect("valid display month");
+        let next = dm.next().expect("next month available");
 
         assert_eq!(next.month, 1);
         assert_eq!(next.year, 2024);
@@ -159,7 +168,7 @@ mod tests {
             (6, 1),
             HolidayEntry::custom("Test custom holiday".to_string()),
         );
-        let dm = DisplayMonth::new(1, 1970, &hm);
+        let dm = DisplayMonth::new(1, 1970, &hm).expect("valid display month");
 
         let matrix = dm.get_matrix();
         assert_eq!(matrix.len(), 5);
@@ -181,7 +190,9 @@ mod tests {
             "expected coloured holiday for day 6"
         );
         assert!(
-            holiday_cell.unwrap().contains("\u{1b}[31m"),
+            holiday_cell
+                .expect("holiday cell exists")
+                .contains("\u{1b}[31m"),
             "holiday cell should be red"
         );
 
@@ -196,13 +207,10 @@ mod tests {
     fn format_includes_weekday_headers() {
         let _color_guard = ColorGuard::enable();
         let hm = HashMap::new();
-        let dm = DisplayMonth::new(1, 2024, &hm);
+        let dm = DisplayMonth::new(1, 2024, &hm).expect("valid display month");
 
         let formatted = dm.format();
-        assert!(
-            formatted.contains("Mo") && formatted.contains("Su"),
-            "weekday abbreviation header missing: {}",
-            formatted
-        );
+        assert!(formatted.contains("Mo"));
+        assert!(formatted.contains("Su"));
     }
 }

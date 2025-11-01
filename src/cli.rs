@@ -1,9 +1,8 @@
 mod actions;
 
-use std::process;
-
 use clap::{Parser, Subcommand, ValueEnum};
 
+use crate::error::Result;
 use crate::holidays::Provider;
 
 #[derive(Parser, Debug)]
@@ -33,19 +32,13 @@ pub enum Mode {
 }
 
 impl Args {
-    pub fn invoke(&self) {
-        let provider = match Provider::from_country(self.country.clone()) {
-            Ok(provider) => provider,
-            Err(err) => {
-                eprintln!("{err}");
-                process::exit(2);
-            }
-        };
+    pub fn invoke(&self) -> Result<()> {
+        let provider = Provider::from_country(self.country.clone())?;
         let env = actions::RealEnvironment::new(provider);
-        self.dispatch(&env);
+        self.dispatch(&env)
     }
 
-    fn dispatch<E: actions::ActionEnvironment>(&self, env: &E) {
+    fn dispatch<E: actions::ActionEnvironment>(&self, env: &E) -> Result<()> {
         match self.action {
             Some(Commands::Delete { day, month }) => actions::delete(env, day, month),
             Some(Commands::Add { day, month }) => actions::add(env, day, month),
@@ -101,22 +94,58 @@ mod tests {
         }
     }
 
+    impl ActionEnvironment for RecordingEnv {
+        fn now(&self) -> DateTime<Utc> {
+            self.now
+        }
+
+        fn holidays(&self, year: i32) -> Result<HM> {
+            Ok(self
+                .holidays
+                .borrow()
+                .get(&year)
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        fn load(&self, year: i32) -> Result<HM> {
+            Ok(self.store.borrow().get(&year).cloned().unwrap_or_default())
+        }
+
+        fn save(&self, year: i32, hm: &HM) -> Result<()> {
+            self.store.borrow_mut().insert(year, hm.clone());
+            Ok(())
+        }
+
+        fn print(&self, msg: &str) -> Result<()> {
+            self.output.borrow_mut().push(msg.to_string());
+            Ok(())
+        }
+
+        fn println(&self, msg: &str) -> Result<()> {
+            self.output.borrow_mut().push(msg.to_string());
+            Ok(())
+        }
+    }
+
     struct TempHome {
         previous: Option<String>,
         path: PathBuf,
     }
 
     impl TempHome {
-        unsafe fn new(label: &str) -> Self {
+        fn new(label: &str) -> Self {
             let mut path = std::env::temp_dir();
             let nanos = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
+                .expect("time went backwards")
                 .as_nanos();
             path.push(format!("cal2-home-{label}-{nanos}"));
-            fs::create_dir_all(&path).unwrap();
+            fs::create_dir_all(&path).expect("create temporary home directory");
             let previous = std::env::var("HOME").ok();
-            unsafe { std::env::set_var("HOME", &path) };
+            unsafe {
+                std::env::set_var("HOME", &path);
+            }
             Self { previous, path }
         }
     }
@@ -134,42 +163,12 @@ mod tests {
         }
     }
 
-    impl ActionEnvironment for RecordingEnv {
-        fn now(&self) -> DateTime<Utc> {
-            self.now
-        }
-
-        fn holidays(&self, year: i32) -> HM {
-            self.holidays
-                .borrow()
-                .get(&year)
-                .cloned()
-                .unwrap_or_default()
-        }
-
-        fn load(&self, year: i32) -> HM {
-            self.store.borrow().get(&year).cloned().unwrap_or_default()
-        }
-
-        fn save(&self, year: i32, hm: &HM) {
-            self.store.borrow_mut().insert(year, hm.clone());
-        }
-
-        fn print(&self, msg: &str) {
-            self.output.borrow_mut().push(msg.to_string());
-        }
-
-        fn println(&self, msg: &str) {
-            self.output.borrow_mut().push(msg.to_string());
-        }
-    }
-
     fn jan_first(year: i32) -> DateTime<Utc> {
         Utc.from_utc_datetime(
             &NaiveDate::from_ymd_opt(year, 1, 1)
-                .unwrap()
+                .expect("valid date")
                 .and_hms_opt(0, 0, 0)
-                .unwrap(),
+                .expect("valid time"),
         )
     }
 
@@ -183,14 +182,11 @@ mod tests {
             action: None,
         };
 
-        args.dispatch(&env);
+        args.dispatch(&env).expect("dispatch succeeds");
 
         let outputs = env.outputs();
         assert_eq!(outputs.len(), 1);
-        assert!(
-            outputs[0].contains("January 2024"),
-            "expected current month in output"
-        );
+        assert!(outputs[0].contains("January 2024"));
     }
 
     #[test]
@@ -201,10 +197,9 @@ mod tests {
             action: Some(Commands::List),
         };
 
-        args.dispatch(&env);
+        args.dispatch(&env).expect("dispatch succeeds");
 
-        let outputs = env.outputs();
-        assert_eq!(outputs, vec!["No holidays found".to_string()]);
+        assert_eq!(env.outputs(), vec!["No holidays found".to_string()]);
     }
 
     #[test]
@@ -217,14 +212,11 @@ mod tests {
             }),
         };
 
-        args.dispatch(&env);
+        args.dispatch(&env).expect("dispatch succeeds");
 
         let outputs = env.outputs();
         assert_eq!(outputs.len(), 1);
-        assert!(
-            outputs[0].contains("December 2024"),
-            "expected year view includes December"
-        );
+        assert!(outputs[0].contains("December 2024"));
     }
 
     #[test]
@@ -235,10 +227,10 @@ mod tests {
             action: Some(Commands::Add { day: 1, month: 5 }),
         };
 
-        args.dispatch(&env);
+        args.dispatch(&env).expect("dispatch succeeds");
 
-        let year_map = env.stored(2024).expect("expected stored holidays");
-        let entry = year_map
+        let stored = env.stored(2024).expect("expected stored holidays");
+        let entry = stored
             .get(&(1, 5))
             .expect("expected entry for added holiday");
         assert_eq!(entry.kind, HolidayKind::Custom);
@@ -247,25 +239,25 @@ mod tests {
     #[test]
     #[serial]
     fn invoke_uses_real_environment_with_cache() {
-        let _home = unsafe { TempHome::new("invoke") };
+        let _home = TempHome::new("invoke");
         let provider = Provider::default();
         let year = Utc::now().year();
         let fname = get_filename(year, &provider);
         if let Some(parent) = Path::new(&fname).parent() {
-            fs::create_dir_all(parent).unwrap();
+            fs::create_dir_all(parent).expect("create cache directory");
         }
-        let mut hm = crate::HM::new();
+        let mut hm = HM::new();
         hm.insert(
             (Utc::now().day(), Utc::now().month()),
             HolidayEntry::official("Cached holiday".to_string()),
         );
-        save(&fname, &hm);
+        save(&fname, &hm).expect("save cached holidays");
 
         let args = Args {
             country: None,
             action: None,
         };
 
-        args.invoke();
+        args.invoke().expect("invoke should succeed");
     }
 }

@@ -26,6 +26,10 @@ cal2 list [--country <ISO>]
 cal2 display [--country <ISO>] [q|month|year]
 ```
 
+Every command validates its inputs and emits a descriptive error (non-zero exit
+code) if something goes wrong, such as network failures or malformed
+arguments.
+
 Common examples:
 
 - `cal2 display` – render the current quarter as a colorized calendar (default command).

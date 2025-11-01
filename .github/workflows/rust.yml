@@ -33,6 +33,10 @@ jobs:
             target: x86_64-apple-darwin
             artifact-extension: ""
             apt-packages: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact-extension: ""
+            apt-packages: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact-extension: ".exe"

@@ -18,10 +18,21 @@ pub struct Args {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    Add { day: u32, month: u32 },
-    Delete { day: u32, month: u32 },
-    List,
-    Display { mode: Option<Mode> },
+    Add {
+        day: u32,
+        month: u32,
+    },
+    Delete {
+        day: u32,
+        month: u32,
+    },
+    List {
+        #[arg(long, value_enum, default_value_t = OutputFormat::default())]
+        format: OutputFormat,
+    },
+    Display {
+        mode: Option<Mode>,
+    },
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -29,6 +40,14 @@ pub enum Mode {
     Q,
     Month,
     Year,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug, Default)]
+pub enum OutputFormat {
+    #[default]
+    Table,
+    Json,
+    Markdown,
 }
 
 impl Args {
@@ -43,7 +62,7 @@ impl Args {
             Some(Commands::Delete { day, month }) => actions::delete(env, day, month),
             Some(Commands::Add { day, month }) => actions::add(env, day, month),
             Some(Commands::Display { mode }) => actions::display(env, mode.unwrap_or(Mode::Q)),
-            Some(Commands::List) => actions::list(env),
+            Some(Commands::List { format }) => actions::list(env, format),
             None => actions::display(env, Mode::Q),
         }
     }
@@ -194,7 +213,9 @@ mod tests {
         let env = RecordingEnv::new(jan_first(2024));
         let args = Args {
             country: None,
-            action: Some(Commands::List),
+            action: Some(Commands::List {
+                format: OutputFormat::Table,
+            }),
         };
 
         args.dispatch(&env).expect("dispatch succeeds");

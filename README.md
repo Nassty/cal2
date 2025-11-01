@@ -30,12 +30,16 @@ Every command validates its inputs and emits a descriptive error (non-zero exit
 code) if something goes wrong, such as network failures or malformed
 arguments.
 
+`cal2 list` accepts `--format table|json|markdown` (default `table`) to control
+its output style.
+
 Common examples:
 
 - `cal2 display` – render the current quarter as a colorized calendar (default command).
 - `cal2 display --country DE year` – view all German months using OpenHolidays.
 - `cal2 list` – show all holidays for the current year from Argentina Datos.
 - `cal2 list --country US` – fetch the current year's US holidays via OpenHolidays.
+- `cal2 list --format json` – emit the holiday list as JSON for scripting.
 - `cal2 add 24 12` – add December 24 to your personal list for the active year.
 - `cal2 delete --country DE 6 1` – drop Epiphany from a German calendar you generated earlier.
 
@@ -56,6 +60,12 @@ Run the tests before sending patches:
 
 ```bash
 cargo test
+```
+
+To check code coverage locally:
+
+```bash
+cargo tarpaulin
 ```
 
 If you need to inspect cached data while hacking on the project, check the files in `~/.config/` starting with `hm-`.

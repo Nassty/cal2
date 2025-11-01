@@ -1,5 +1,5 @@
 use crate::HM;
-use crate::cli::Mode;
+use crate::cli::{Mode, OutputFormat};
 use crate::display_month::DisplayMonth;
 use crate::error::Result;
 use crate::holidays::{
@@ -107,7 +107,7 @@ pub fn display<E: ActionEnvironment>(env: &E, mode: Mode) -> Result<()> {
     env.print(&table.to_string())
 }
 
-pub fn list<E: ActionEnvironment>(env: &E) -> Result<()> {
+pub fn list<E: ActionEnvironment>(env: &E, format: OutputFormat) -> Result<()> {
     let now = env.now();
     let year = now.year();
     let mut holidays: Vec<_> = env.holidays(year)?.into_iter().collect();
@@ -119,19 +119,91 @@ pub fn list<E: ActionEnvironment>(env: &E) -> Result<()> {
 
     holidays.sort_by(|a, b| (a.0.1, a.0.0).cmp(&(b.0.1, b.0.0)));
 
-    let lines: Vec<String> = holidays
-        .into_iter()
-        .map(|((day, month), entry)| {
-            let date = format!("{year}-{month:02}-{day:02}");
-            let kind = match entry.kind {
-                HolidayKind::Official => "official",
-                HolidayKind::Custom => "custom",
-            };
-            format!("{date}  {} [{kind}]", entry.name)
-        })
-        .collect();
+    match format {
+        OutputFormat::Table => {
+            let lines: Vec<String> = holidays
+                .into_iter()
+                .map(|((day, month), entry)| {
+                    let date = format!("{year}-{month:02}-{day:02}");
+                    let kind = match entry.kind {
+                        HolidayKind::Official => "official",
+                        HolidayKind::Custom => "custom",
+                    };
+                    format!("{date}  {} [{kind}]", entry.name)
+                })
+                .collect();
+            env.println(&lines.join("\n"))
+        }
+        OutputFormat::Json => {
+            #[derive(serde::Serialize)]
+            struct Record {
+                date: String,
+                name: String,
+                kind: String,
+            }
 
-    env.println(&lines.join("\n"))
+            let payload: Vec<Record> = holidays
+                .into_iter()
+                .map(|((day, month), entry)| Record {
+                    date: format!("{year}-{month:02}-{day:02}"),
+                    name: entry.name,
+                    kind: match entry.kind {
+                        HolidayKind::Official => "official",
+                        HolidayKind::Custom => "custom",
+                    }
+                    .to_string(),
+                })
+                .collect();
+            let body = serde_json::to_string_pretty(&payload)?;
+            env.println(&body)
+        }
+        OutputFormat::Markdown => {
+            let mut records = Vec::with_capacity(holidays.len());
+            let mut width_date = "Date".len();
+            let mut width_name = "Name".len();
+            let mut width_kind = "Kind".len();
+            for ((day, month), entry) in holidays {
+                let date = format!("{year}-{month:02}-{day:02}");
+                let kind = match entry.kind {
+                    HolidayKind::Official => "official".to_string(),
+                    HolidayKind::Custom => "custom".to_string(),
+                };
+                width_date = width_date.max(date.len());
+                width_name = width_name.max(entry.name.len());
+                width_kind = width_kind.max(kind.len());
+                records.push((date, entry.name, kind));
+            }
+
+            let mut rows = Vec::with_capacity(records.len() + 2);
+            rows.push(format!(
+                "| {date:<width_date$} | {name:<width_name$} | {kind:<width_kind$} |",
+                date = "Date",
+                name = "Name",
+                kind = "Kind",
+                width_date = width_date,
+                width_name = width_name,
+                width_kind = width_kind,
+            ));
+            rows.push(format!(
+                "| {date:-<width_date$} | {name:-<width_name$} | {kind:-<width_kind$} |",
+                date = "",
+                name = "",
+                kind = "",
+                width_date = width_date,
+                width_name = width_name,
+                width_kind = width_kind,
+            ));
+            for (date, name, kind) in records {
+                rows.push(format!(
+                    "| {date:<width_date$} | {name:<width_name$} | {kind:<width_kind$} |",
+                    width_date = width_date,
+                    width_name = width_name,
+                    width_kind = width_kind,
+                ));
+            }
+            env.println(&rows.join("\n"))
+        }
+    }
 }
 
 pub fn add<E: ActionEnvironment>(env: &E, day: u32, month: u32) -> Result<()> {
@@ -336,7 +408,7 @@ mod tests {
         holidays.insert((24, 12), HolidayEntry::custom("Family dinner".to_string()));
         let env = TestEnvironment::new(test_now(2024, 6, 1)).with_holidays(2024, holidays);
 
-        list(&env).expect("list should succeed");
+        list(&env, OutputFormat::Table).expect("list should succeed");
 
         let outputs = env.outputs();
         assert_eq!(outputs.len(), 1);
@@ -355,7 +427,7 @@ mod tests {
         );
         let env = TestEnvironment::new(test_now(2024, 5, 1)).with_holidays(2024, holidays);
 
-        list(&env).expect("list should succeed");
+        list(&env, OutputFormat::Table).expect("list should succeed");
 
         let output = env
             .outputs()
@@ -371,9 +443,48 @@ mod tests {
     fn list_informs_when_no_holidays_available() {
         let env = TestEnvironment::new(test_now(2024, 6, 1));
 
-        list(&env).expect("list should succeed");
+        list(&env, OutputFormat::Table).expect("list should succeed");
 
         assert_eq!(env.outputs(), vec!["No holidays found\n".to_string()]);
+    }
+
+    #[test]
+    fn list_outputs_json() {
+        let mut holidays = HM::new();
+        holidays.insert((1, 1), HolidayEntry::official("New Year's Day".to_string()));
+        let env = TestEnvironment::new(test_now(2024, 6, 1)).with_holidays(2024, holidays);
+
+        list(&env, OutputFormat::Json).expect("list should succeed");
+
+        let outputs = env.outputs();
+        assert_eq!(outputs.len(), 1);
+        let json = outputs[0].trim();
+        let value: serde_json::Value = serde_json::from_str(json).expect("valid json output");
+        assert!(value.is_array());
+        assert_eq!(value[0]["name"], "New Year's Day");
+    }
+
+    #[test]
+    fn list_outputs_markdown() {
+        let mut holidays = HM::new();
+        holidays.insert((1, 1), HolidayEntry::official("New Year's Day".to_string()));
+        let env = TestEnvironment::new(test_now(2024, 6, 1)).with_holidays(2024, holidays);
+
+        list(&env, OutputFormat::Markdown).expect("list should succeed");
+
+        let outputs = env.outputs();
+        assert_eq!(outputs.len(), 1);
+        let markdown = outputs[0].trim();
+        let mut lines = markdown.lines();
+        let header = lines.next().expect("header row");
+        assert!(header.contains("Date") && header.contains("Name") && header.contains("Kind"));
+        let separator = lines.next().expect("separator row");
+        assert!(separator.contains("-") && separator.starts_with('|'));
+        let data = lines.next().expect("data row");
+        let cells: Vec<_> = data.split('|').map(|c| c.trim()).collect();
+        assert!(cells.contains(&"2024-01-01"));
+        assert!(cells.contains(&"New Year's Day"));
+        assert!(cells.contains(&"official"));
     }
 
     #[test]

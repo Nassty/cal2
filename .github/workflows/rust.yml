@@ -19,27 +19,22 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            use-cross: false
             artifact-extension: ""
             apt-packages: ""
           - os: ubuntu-latest
             target: i686-unknown-linux-gnu
-            use-cross: false
             artifact-extension: ""
             apt-packages: "gcc-multilib libc6-dev-i386 pkg-config"
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            use-cross: true
             artifact-extension: ""
             apt-packages: ""
           - os: macos-latest
             target: x86_64-apple-darwin
-            use-cross: false
             artifact-extension: ""
             apt-packages: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            use-cross: false
             artifact-extension: ".exe"
             apt-packages: ""
 
@@ -55,23 +50,27 @@ jobs:
       - name: Install target
         run: rustup target add ${{ matrix.target }}
 
-      - name: Install system packages
-        if: matrix.os == 'ubuntu-latest' && matrix.apt-packages != ''
+      - name: Install system packages (i686)
+        if: matrix.target == 'i686-unknown-linux-gnu'
         run: |
           sudo dpkg --add-architecture i386 || true
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.apt-packages }}
 
-      - name: Install cross
-        if: matrix.use-cross == 'true'
+      - name: Install cross (aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Build (cross)
-        if: matrix.use-cross == 'true'
+      - name: Build (i686)
+        if: matrix.target == 'i686-unknown-linux-gnu'
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: cross build --release --target ${{ matrix.target }}
 
-      - name: Build (native)
-        if: matrix.use-cross != 'true'
+      - name: Build (default)
+        if: matrix.target != 'aarch64-unknown-linux-gnu' && matrix.target != 'i686-unknown-linux-gnu'
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare artifact

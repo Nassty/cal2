@@ -26,11 +26,12 @@ pub enum Commands {
 
 impl Args {
     pub fn invoke(&self) {
+        let env = actions::RealEnvironment::default();
         match self.action {
-            Some(Commands::Delete { day, month }) => actions::delete(day, month),
-            Some(Commands::Display { mode: Some(mode) }) => actions::display(mode),
-            Some(Commands::Display { mode: None }) | None => actions::display(Mode::Q),
-            Some(Commands::Add { day, month }) => actions::add(day, month),
+            Some(Commands::Delete { day, month }) => actions::delete(&env, day, month),
+            Some(Commands::Display { mode: Some(mode) }) => actions::display(&env, mode),
+            Some(Commands::Display { mode: None }) | None => actions::display(&env, Mode::Q),
+            Some(Commands::Add { day, month }) => actions::add(&env, day, month),
         }
     }
 }

@@ -57,3 +57,49 @@ pub fn get_holidays(year: i32) -> HM {
     save(&fname, &hm);
     hm
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{collections::HashMap, fs, time::SystemTime};
+
+    fn temp_file(label: &str) -> String {
+        let mut path = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        path.push(format!("cal2-{label}-{nanos}"));
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn load_returns_err_for_missing_file() {
+        let fname = temp_file("missing");
+        assert!(load(&fname).is_err());
+    }
+
+    #[test]
+    fn save_and_load_roundtrip_preserves_holidays() {
+        let mut hm = HashMap::new();
+        hm.insert((1, 1), true);
+        hm.insert((25, 12), true);
+
+        let fname = temp_file("roundtrip");
+        save(&fname, &hm);
+        let loaded = load(&fname).expect("load should succeed after save");
+
+        assert_eq!(loaded, hm);
+        fs::remove_file(&fname).unwrap();
+    }
+
+    #[test]
+    fn get_filename_places_cache_under_config_directory() {
+        let year = 2030;
+        let fname = get_filename(year);
+        assert!(
+            fname.ends_with(&format!("hm-{year}")),
+            "unexpected cache filename: {fname}"
+        );
+    }
+}

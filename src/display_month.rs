@@ -42,7 +42,7 @@ impl<'a> DisplayMonth<'a> {
         Self::new(next_month, year, self.hm)
     }
     pub fn prev(&self) -> Self {
-        let prev_month = (self.month % 12 - 1) % 12;
+        let prev_month = if self.month == 1 { 12 } else { self.month - 1 };
         let year = if prev_month < self.month {
             self.year
         } else {
@@ -104,5 +104,84 @@ impl<'a> DisplayMonth<'a> {
         });
 
         table.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    struct ColorGuard;
+
+    impl ColorGuard {
+        fn enable() -> Self {
+            colored::control::set_override(true);
+            Self
+        }
+    }
+
+    impl Drop for ColorGuard {
+        fn drop(&mut self) {
+            colored::control::set_override(false);
+        }
+    }
+
+    #[test]
+    fn prev_from_january_wraps_to_december_previous_year() {
+        let hm = HashMap::new();
+        let dm = DisplayMonth::new(1, 2024, &hm);
+        let prev = dm.prev();
+
+        assert_eq!(prev.month, 12);
+        assert_eq!(prev.year, 2023);
+    }
+
+    #[test]
+    fn next_from_december_wraps_to_january_next_year() {
+        let hm = HashMap::new();
+        let dm = DisplayMonth::new(12, 2023, &hm);
+        let next = dm.next();
+
+        assert_eq!(next.month, 1);
+        assert_eq!(next.year, 2024);
+    }
+
+    #[test]
+    fn get_matrix_marks_holidays_and_weekends() {
+        let _color_guard = ColorGuard::enable();
+        let mut hm = HashMap::new();
+        hm.insert((6, 1), true);
+        let dm = DisplayMonth::new(1, 1970, &hm);
+
+        let matrix = dm.get_matrix();
+        assert_eq!(matrix.len(), 5);
+        assert!(matrix.iter().all(|row| row.len() <= 7));
+
+        assert_eq!(matrix[0][0], "");
+        assert_eq!(matrix[0][1], "");
+        assert_eq!(matrix[0][2], "");
+
+        let flattened: Vec<&String> = matrix.iter().flat_map(|row| row.iter()).collect();
+        let filled_cells = flattened.iter().filter(|cell| !cell.is_empty()).count();
+        assert_eq!(filled_cells, 31);
+
+        let holiday_cell = flattened
+            .iter()
+            .find(|cell| cell.contains('6') && cell.contains('\u{1b}'));
+        assert!(
+            holiday_cell.is_some(),
+            "expected coloured holiday for day 6"
+        );
+        assert!(
+            holiday_cell.unwrap().contains("\u{1b}[31m"),
+            "holiday cell should be red"
+        );
+
+        let weekend_cell = flattened.iter().find(|cell| cell.contains("\u{1b}[32m"));
+        assert!(
+            weekend_cell.is_some(),
+            "expected coloured weekend in matrix"
+        );
     }
 }

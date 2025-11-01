@@ -96,11 +96,11 @@ impl<'a> DisplayMonth<'a> {
         table.set_format(format);
         table.add_row(Row::new(
             (0..7)
-                .map(|i| Cell::new(&Weekday::try_from(i).unwrap().to_string()[0..2].to_string()))
+                .map(|i| Cell::new(&Weekday::try_from(i).unwrap().to_string()[0..2]))
                 .collect(),
         ));
         self.get_matrix().iter().for_each(|x| {
-            table.add_row(Row::new(x.iter().map(|y: &String| Cell::new(&y)).collect()));
+            table.add_row(Row::new(x.iter().map(|y: &String| Cell::new(y)).collect()));
         });
 
         table.to_string()

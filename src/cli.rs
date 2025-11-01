@@ -26,7 +26,7 @@ pub enum Commands {
 
 impl Args {
     pub fn invoke(&self) {
-        let env = actions::RealEnvironment::default();
+        let env = actions::RealEnvironment;
         match self.action {
             Some(Commands::Delete { day, month }) => actions::delete(&env, day, month),
             Some(Commands::Display { mode: Some(mode) }) => actions::display(&env, mode),

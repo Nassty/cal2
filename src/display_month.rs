@@ -1,6 +1,6 @@
 use chrono::{Datelike, Month, NaiveDate, Weekday};
 use colored::Colorize;
-use prettytable::{format, Cell, Row, Table};
+use prettytable::{Cell, Row, Table, format};
 
 use crate::HM;
 

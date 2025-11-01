@@ -18,7 +18,7 @@ impl<'a> DisplayMonth<'a> {
     pub fn new(month: u32, year: i32, hm: &'a HM) -> Self {
         let first_day = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
         let last_day = NaiveDate::from_ymd_opt(year, month + 1, 1)
-            .unwrap_or(NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap())
+            .unwrap_or_else(|| NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap())
             .pred_opt()
             .unwrap();
         let k = Month::try_from(month as u8).unwrap();
@@ -32,6 +32,7 @@ impl<'a> DisplayMonth<'a> {
             hm,
         }
     }
+
     pub fn next(&self) -> Self {
         let next_month = (self.month % 12) + 1;
         let year = if next_month > self.month {
@@ -41,6 +42,7 @@ impl<'a> DisplayMonth<'a> {
         };
         Self::new(next_month, year, self.hm)
     }
+
     pub fn prev(&self) -> Self {
         let prev_month = if self.month == 1 { 12 } else { self.month - 1 };
         let year = if prev_month < self.month {
@@ -50,6 +52,7 @@ impl<'a> DisplayMonth<'a> {
         };
         Self::new(prev_month, year, self.hm)
     }
+
     pub fn get_matrix(&self) -> Vec<Vec<String>> {
         let today = chrono::Utc::now().naive_local().date();
         let mut curr_day = self.first_day;
@@ -64,12 +67,11 @@ impl<'a> DisplayMonth<'a> {
                 let cr = curr_day;
                 curr_day = curr_day.succ_opt().unwrap();
                 let day = cr.day();
-                let is_holiday = *self.hm.get(&(day, self.month)).unwrap_or(&false);
+                let is_holiday = self.hm.contains_key(&(day, self.month));
                 Some((cr, is_holiday))
             })
             .map(|x| match x {
                 Some((cr, _)) if cr == today => cr.day().to_string().black().on_white().to_string(),
-
                 Some((cr, _)) if weekends.contains(&cr.weekday()) => {
                     cr.day().to_string().green().to_string()
                 }
@@ -82,6 +84,7 @@ impl<'a> DisplayMonth<'a> {
             .map(|x| x.to_vec())
             .collect()
     }
+
     pub fn format(&self) -> String {
         let mut table = Table::new();
         let format = format::FormatBuilder::new()
@@ -110,6 +113,7 @@ impl<'a> DisplayMonth<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::holidays::HolidayEntry;
     use std::collections::HashMap;
 
     struct ColorGuard;
@@ -151,7 +155,10 @@ mod tests {
     fn get_matrix_marks_holidays_and_weekends() {
         let _color_guard = ColorGuard::enable();
         let mut hm = HashMap::new();
-        hm.insert((6, 1), true);
+        hm.insert(
+            (6, 1),
+            HolidayEntry::custom("Test custom holiday".to_string()),
+        );
         let dm = DisplayMonth::new(1, 1970, &hm);
 
         let matrix = dm.get_matrix();
@@ -182,6 +189,20 @@ mod tests {
         assert!(
             weekend_cell.is_some(),
             "expected coloured weekend in matrix"
+        );
+    }
+
+    #[test]
+    fn format_includes_weekday_headers() {
+        let _color_guard = ColorGuard::enable();
+        let hm = HashMap::new();
+        let dm = DisplayMonth::new(1, 2024, &hm);
+
+        let formatted = dm.format();
+        assert!(
+            formatted.contains("Mo") && formatted.contains("Su"),
+            "weekday abbreviation header missing: {}",
+            formatted
         );
     }
 }

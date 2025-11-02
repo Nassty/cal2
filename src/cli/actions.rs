@@ -206,15 +206,26 @@ pub fn list<E: ActionEnvironment>(env: &E, format: OutputFormat) -> Result<()> {
     }
 }
 
-pub fn add<E: ActionEnvironment>(env: &E, day: u32, month: u32) -> Result<()> {
+pub fn add<E: ActionEnvironment>(
+    env: &E,
+    day: u32,
+    month: u32,
+    description: Option<String>,
+) -> Result<()> {
     let now = env.now();
     let mut hm = env.load(now.year())?;
-    match hm.entry((day, month)) {
-        Entry::Occupied(_) => {}
-        Entry::Vacant(v) => {
-            let name = format!("Custom holiday ({day:02}/{month:02})");
-            v.insert(HolidayEntry::custom(name));
-        }
+    if let Entry::Vacant(v) = hm.entry((day, month)) {
+        let name = description
+            .and_then(|d| {
+                let trimmed = d.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            })
+            .unwrap_or_else(|| format!("Custom holiday ({day:02}/{month:02})"));
+        v.insert(HolidayEntry::custom(name));
     }
     env.save(now.year(), &hm)?;
     env.println("OK")
@@ -491,7 +502,7 @@ mod tests {
     fn add_stores_holiday_and_prints_ok() {
         let env = TestEnvironment::new(test_now(2024, 5, 1));
 
-        add(&env, 24, 12).expect("add should succeed");
+        add(&env, 24, 12, None).expect("add should succeed");
 
         let stored = env.stored(2024).expect("holiday map stored");
         let entry = stored
@@ -503,12 +514,32 @@ mod tests {
     }
 
     #[test]
+    fn add_uses_provided_description_when_present() {
+        let env = TestEnvironment::new(test_now(2024, 5, 1));
+
+        add(
+            &env,
+            2,
+            7,
+            Some("  Family gathering  ".to_string()),
+        )
+        .expect("add should succeed");
+
+        let stored = env.stored(2024).expect("holiday map stored");
+        let entry = stored
+            .get(&(2, 7))
+            .expect("custom holiday should be inserted");
+        assert_eq!(entry.kind, HolidayKind::Custom);
+        assert_eq!(entry.name, "Family gathering");
+    }
+
+    #[test]
     fn add_does_not_override_existing_official_holiday() {
         let mut store = HM::new();
         store.insert((1, 5), HolidayEntry::official("Labour Day".to_string()));
         let env = TestEnvironment::new(test_now(2024, 5, 1)).with_store(2024, store);
 
-        add(&env, 1, 5).expect("add should succeed");
+        add(&env, 1, 5, None).expect("add should succeed");
 
         let stored = env.stored(2024).expect("holiday map stored");
         let entry = stored.get(&(1, 5)).expect("holiday should remain present");

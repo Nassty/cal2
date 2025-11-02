@@ -14,7 +14,7 @@
 ## Installation
 
 ```bash
-cargo install --path .
+cargo install --path . --locked
 ```
 
 You can run the binary directly with `cargo run -- <args>` while developing.
@@ -22,7 +22,7 @@ You can run the binary directly with `cargo run -- <args>` while developing.
 ## Usage
 
 ```text
-cal2 add [--country <ISO>] <day> <month>
+cal2 add [--country <ISO>] [--description <TEXT>] <day> <month>
 cal2 delete [--country <ISO>] <day> <month>
 cal2 list [--country <ISO>]
 cal2 display [--country <ISO>] [q|month|year]
@@ -42,7 +42,7 @@ Common examples:
 - `cal2 list` – show all holidays for the current year from Argentina Datos.
 - `cal2 list --country US` – fetch the current year's US holidays via OpenHolidays.
 - `cal2 list --format json` – emit the holiday list as JSON for scripting.
-- `cal2 add 24 12` – add December 24 to your personal list for the active year.
+- `cal2 add --description "Family dinner" 24 12` – add December 24 with a custom label for the active year.
 - `cal2 delete --country DE 6 1` – drop Epiphany from a German calendar you generated earlier.
 
 ### Holiday Providers
@@ -54,7 +54,7 @@ Holiday results are stored in binary caches named `hm-<provider>-<year>` inside 
 
 ### Custom Holidays
 
-`cal2 add` and `cal2 delete` update the cache for the current year (based on your system clock). Custom dates are stored per provider, so you can maintain separate local overrides for multiple countries.
+`cal2 add` and `cal2 delete` update the cache for the current year (based on your system clock). Custom dates are stored per provider, so you can maintain separate local overrides for multiple countries. When adding a date you can supply `--description` to store a custom name; if omitted, `cal2` records a generic label.
 
 ## Development
 

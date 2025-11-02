@@ -21,6 +21,8 @@ pub enum Commands {
     Add {
         day: u32,
         month: u32,
+        #[arg(long)]
+        description: Option<String>,
     },
     Delete {
         day: u32,
@@ -58,11 +60,15 @@ impl Args {
     }
 
     fn dispatch<E: actions::ActionEnvironment>(&self, env: &E) -> Result<()> {
-        match self.action {
-            Some(Commands::Delete { day, month }) => actions::delete(env, day, month),
-            Some(Commands::Add { day, month }) => actions::add(env, day, month),
-            Some(Commands::Display { mode }) => actions::display(env, mode.unwrap_or(Mode::Q)),
-            Some(Commands::List { format }) => actions::list(env, format),
+        match self.action.as_ref() {
+            Some(Commands::Delete { day, month }) => actions::delete(env, *day, *month),
+            Some(Commands::Add {
+                day,
+                month,
+                description,
+            }) => actions::add(env, *day, *month, description.clone()),
+            Some(Commands::Display { mode }) => actions::display(env, (*mode).unwrap_or(Mode::Q)),
+            Some(Commands::List { format }) => actions::list(env, *format),
             None => actions::display(env, Mode::Q),
         }
     }
@@ -245,7 +251,11 @@ mod tests {
         let env = RecordingEnv::new(jan_first(2024));
         let args = Args {
             country: None,
-            action: Some(Commands::Add { day: 1, month: 5 }),
+            action: Some(Commands::Add {
+                day: 1,
+                month: 5,
+                description: None,
+            }),
         };
 
         args.dispatch(&env).expect("dispatch succeeds");
@@ -255,6 +265,29 @@ mod tests {
             .get(&(1, 5))
             .expect("expected entry for added holiday");
         assert_eq!(entry.kind, HolidayKind::Custom);
+        assert!(entry.name.contains("Custom holiday"));
+    }
+
+    #[test]
+    fn dispatch_add_forwards_description() {
+        let env = RecordingEnv::new(jan_first(2024));
+        let args = Args {
+            country: None,
+            action: Some(Commands::Add {
+                day: 6,
+                month: 7,
+                description: Some("Independence Eve".to_string()),
+            }),
+        };
+
+        args.dispatch(&env).expect("dispatch succeeds");
+
+        let stored = env.stored(2024).expect("expected stored holidays");
+        let entry = stored
+            .get(&(6, 7))
+            .expect("expected entry for added holiday");
+        assert_eq!(entry.kind, HolidayKind::Custom);
+        assert_eq!(entry.name, "Independence Eve");
     }
 
     #[test]

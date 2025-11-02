@@ -2,8 +2,7 @@
 
 `cal2` is a small Rust CLI that fetches and lists public holidays with provider-backed data, renders colorized calendars, and lets you record personal days off alongside them.
 
-![screenshot](screenshot.jpg?raw=true)
-
+![screenshot](screenshot.jpeg?raw=true)
 
 ## Features
 - Display the current quarter, a single month, or an entire year with ANSI colors.

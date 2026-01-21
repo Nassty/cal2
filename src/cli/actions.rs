@@ -1,5 +1,5 @@
 use crate::HM;
-use crate::cli::{Mode, OutputFormat};
+use crate::cli::{DisplayOptions, Mode, MonthRange, OutputFormat};
 use crate::display_month::DisplayMonth;
 use crate::error::Result;
 use crate::holidays::{
@@ -8,6 +8,7 @@ use crate::holidays::{
 use chrono::{DateTime, Datelike, Utc};
 use prettytable::{Cell, Row, Table, format};
 use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::iter::zip;
 
@@ -68,22 +69,102 @@ impl ActionEnvironment for RealEnvironment {
 
 pub fn display<E: ActionEnvironment>(env: &E, mode: Mode) -> Result<()> {
     let now = env.now();
+    let today = now.naive_utc().date();
+    let options = DisplayOptions {
+        highlight_today: true,
+        julian: false,
+    };
     let hm = env.holidays(now.year())?;
     let calendars: Vec<_> = match mode {
         Mode::Q => {
-            let current = DisplayMonth::new(now.month(), now.year(), &hm)?;
+            let current = DisplayMonth::new(now.month(), now.year(), &hm, options.clone(), today)?;
             vec![current.prev()?, current.clone(), current.next()?]
         }
-        Mode::Month => vec![DisplayMonth::new(now.month(), now.year(), &hm)?],
+        Mode::Month => vec![DisplayMonth::new(
+            now.month(),
+            now.year(),
+            &hm,
+            options,
+            today,
+        )?],
         Mode::Year => {
             let mut rows = Vec::with_capacity(12);
             for month in 1..=12 {
-                rows.push(DisplayMonth::new(month, now.year(), &hm)?);
+                rows.push(DisplayMonth::new(
+                    month,
+                    now.year(),
+                    &hm,
+                    options.clone(),
+                    today,
+                )?);
             }
             rows
         }
     };
 
+    let mut table = Table::new();
+    let format = format::FormatBuilder::new().padding(0, 0).build();
+    table.set_format(format);
+    let headers = calendars
+        .iter()
+        .map(|x| {
+            let mut c = Cell::new(&x.month_name);
+            c.align(format::Alignment::CENTER);
+            c
+        })
+        .collect::<Vec<_>>();
+    let bodies = calendars
+        .iter()
+        .map(|x| Cell::new(&x.format()))
+        .collect::<Vec<_>>();
+
+    zip(headers.as_slice().chunks(3), bodies.as_slice().chunks(3)).for_each(|(header, body)| {
+        table.add_row(Row::new(header.to_vec()));
+        table.add_row(Row::new(body.to_vec()));
+    });
+    env.print(&table.to_string())
+}
+
+pub fn display_range<E: ActionEnvironment>(
+    env: &E,
+    range: MonthRange,
+    options: DisplayOptions,
+) -> Result<()> {
+    let now = env.now();
+    let today = now.naive_utc().date();
+
+    // Collect all months in the range
+    let mut months: Vec<(u32, i32)> = Vec::with_capacity(range.count);
+    let mut month = range.start_month;
+    let mut year = range.start_year;
+    for _ in 0..range.count {
+        months.push((month, year));
+        month += 1;
+        if month > 12 {
+            month = 1;
+            year += 1;
+        }
+    }
+
+    // Collect all unique years and fetch holidays for each
+    let years: Vec<i32> = months.iter().map(|(_, y)| *y).collect();
+    let mut holidays_by_year: HashMap<i32, HM> = HashMap::new();
+    for y in years {
+        if !holidays_by_year.contains_key(&y) {
+            holidays_by_year.insert(y, env.holidays(y)?);
+        }
+    }
+
+    // Build DisplayMonth instances
+    let calendars: Vec<_> = months
+        .iter()
+        .map(|(m, y)| {
+            let hm = holidays_by_year.get(y).expect("holidays should exist");
+            DisplayMonth::new(*m, *y, hm, options.clone(), today)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // Format and output
     let mut table = Table::new();
     let format = format::FormatBuilder::new().padding(0, 0).build();
     table.set_format(format);

@@ -87,6 +87,24 @@ pub enum Commands {
     Display {
         mode: Option<Mode>,
     },
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigAction {
+    /// Set the default country for holidays
+    SetCountry {
+        /// Country code (2-3 letter ISO code, e.g., US, AR, DE)
+        country: String,
+    },
+    /// Clear the default country (use built-in default)
+    ClearCountry,
+    /// Show current configuration
+    Show,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -106,7 +124,15 @@ pub enum OutputFormat {
 
 impl Args {
     pub fn invoke(&self) -> Result<()> {
-        let provider = Provider::from_country(self.country.clone())?;
+        // Determine country: CLI flag takes precedence, then config, then default
+        let country = if self.country.is_some() {
+            self.country.clone()
+        } else {
+            crate::config::load_config()
+                .ok()
+                .and_then(|c| c.default_country)
+        };
+        let provider = Provider::from_country(country)?;
         let env = actions::RealEnvironment::new(provider);
         self.dispatch(&env)
     }
@@ -160,8 +186,12 @@ impl Args {
         let base_month = self.month.or(pos_month).unwrap_or(current_month);
         let base_year = pos_year.unwrap_or(current_year);
 
+        // Check if only a year was specified (no month flag and no month in positional)
+        // In standard cal behavior, "cal 2024" shows the full year
+        let year_only = pos_year.is_some() && pos_month.is_none() && self.month.is_none();
+
         // Calculate range based on flags
-        if self.full_year {
+        if self.full_year || year_only {
             // Full year: 12 months starting from January
             MonthRange {
                 start_month: 1,
@@ -218,6 +248,7 @@ impl Args {
             }) => actions::add(env, *day, *month, description.clone()),
             Some(Commands::Display { mode }) => actions::display(env, (*mode).unwrap_or(Mode::Q)),
             Some(Commands::List { format }) => actions::list(env, *format),
+            Some(Commands::Config { action }) => actions::config(env, action),
             None => {
                 if self.has_cal_flags() {
                     let now = env.now();
@@ -243,7 +274,6 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::fs;
-    use std::path::{Path, PathBuf};
     use std::time::SystemTime;
 
     struct RecordingEnv {
@@ -308,41 +338,6 @@ mod tests {
         fn println(&self, msg: &str) -> Result<()> {
             self.output.borrow_mut().push(msg.to_string());
             Ok(())
-        }
-    }
-
-    struct TempHome {
-        previous: Option<String>,
-        path: PathBuf,
-    }
-
-    impl TempHome {
-        fn new(label: &str) -> Self {
-            let mut path = std::env::temp_dir();
-            let nanos = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("time went backwards")
-                .as_nanos();
-            path.push(format!("cal2-home-{label}-{nanos}"));
-            fs::create_dir_all(&path).expect("create temporary home directory");
-            let previous = std::env::var("HOME").ok();
-            unsafe {
-                std::env::set_var("HOME", &path);
-            }
-            Self { previous, path }
-        }
-    }
-
-    impl Drop for TempHome {
-        fn drop(&mut self) {
-            unsafe {
-                if let Some(prev) = &self.previous {
-                    std::env::set_var("HOME", prev);
-                } else {
-                    std::env::remove_var("HOME");
-                }
-            }
-            let _ = fs::remove_dir_all(&self.path);
         }
     }
 
@@ -456,11 +451,30 @@ mod tests {
     #[test]
     #[serial]
     fn invoke_uses_real_environment_with_cache() {
-        let _home = TempHome::new("invoke");
+        let temp_dir = {
+            let mut path = std::env::temp_dir();
+            let nanos = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos();
+            path.push(format!("cal2-home-invoke-{nanos}"));
+            fs::create_dir_all(&path).expect("create temp dir");
+            path
+        };
+
+        let previous_home = std::env::var("HOME").ok();
+        let previous_data = std::env::var("XDG_DATA_HOME").ok();
+        let previous_config = std::env::var("XDG_CONFIG_HOME").ok();
+        unsafe {
+            std::env::set_var("HOME", &temp_dir);
+            std::env::set_var("XDG_DATA_HOME", temp_dir.join("data"));
+            std::env::set_var("XDG_CONFIG_HOME", temp_dir.join("config"));
+        }
+
         let provider = Provider::default();
         let year = Utc::now().year();
-        let fname = get_filename(year, &provider);
-        if let Some(parent) = Path::new(&fname).parent() {
+        let path = get_filename(year, &provider);
+        if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create cache directory");
         }
         let mut hm = HM::new();
@@ -468,11 +482,27 @@ mod tests {
             (Utc::now().day(), Utc::now().month()),
             HolidayEntry::official("Cached holiday".to_string()),
         );
-        save(&fname, &hm).expect("save cached holidays");
+        save(&path, &hm).expect("save cached holidays");
 
         let args = default_args();
 
         args.invoke().expect("invoke should succeed");
+
+        unsafe {
+            match previous_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match previous_data {
+                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+                None => std::env::remove_var("XDG_DATA_HOME"),
+            }
+            match previous_config {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
@@ -520,7 +550,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_positional_year_displays_that_year() {
+    fn dispatch_positional_year_displays_full_year() {
         let env = RecordingEnv::new(jan_first(2024)).with_holidays(2025, HashMap::new());
         let mut args = default_args();
         args.positional = vec![2025];
@@ -529,7 +559,9 @@ mod tests {
 
         let outputs = env.outputs();
         assert_eq!(outputs.len(), 1);
+        // Standard cal behavior: year-only shows full year
         assert!(outputs[0].contains("January 2025"));
+        assert!(outputs[0].contains("December 2025"));
     }
 
     #[test]

@@ -2,6 +2,7 @@ use clap::Parser;
 use std::{collections::HashMap, ffi::OsString, process};
 
 mod cli;
+mod config;
 mod display_month;
 mod error;
 mod holidays;
@@ -33,54 +34,39 @@ mod tests {
     use crate::holidays::{HolidayEntry, Provider, get_filename, save};
     use chrono::{Datelike, Utc};
     use serial_test::serial;
+    use std::env;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::time::SystemTime;
-
-    struct TempHome {
-        previous: Option<String>,
-        path: PathBuf,
-    }
-
-    impl TempHome {
-        fn new(label: &str) -> Self {
-            let mut path = std::env::temp_dir();
-            let nanos = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("time went backwards")
-                .as_nanos();
-            path.push(format!("cal2-home-{label}-{nanos}"));
-            fs::create_dir_all(&path).expect("create temporary home directory");
-            let previous = std::env::var("HOME").ok();
-            unsafe {
-                std::env::set_var("HOME", &path);
-            }
-            Self { previous, path }
-        }
-    }
-
-    impl Drop for TempHome {
-        fn drop(&mut self) {
-            unsafe {
-                if let Some(prev) = &self.previous {
-                    std::env::set_var("HOME", prev);
-                } else {
-                    std::env::remove_var("HOME");
-                }
-            }
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
 
     #[test]
     #[serial]
     fn run_with_args_uses_cached_display() {
-        let _home = TempHome::new("main-run");
+        let temp_dir: PathBuf = {
+            let mut path = env::temp_dir();
+            let nanos = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos();
+            path.push(format!("cal2-home-main-run-{nanos}"));
+            fs::create_dir_all(&path).expect("create temp dir");
+            path
+        };
+
+        let previous_home = env::var("HOME").ok();
+        let previous_data = env::var("XDG_DATA_HOME").ok();
+        let previous_config = env::var("XDG_CONFIG_HOME").ok();
+        unsafe {
+            env::set_var("HOME", &temp_dir);
+            env::set_var("XDG_DATA_HOME", temp_dir.join("data"));
+            env::set_var("XDG_CONFIG_HOME", temp_dir.join("config"));
+        }
+
         let provider = Provider::default();
         let now = Utc::now();
         let year = now.year();
-        let fname = get_filename(year, &provider);
-        if let Some(parent) = Path::new(&fname).parent() {
+        let path = get_filename(year, &provider);
+        if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create cache directory");
         }
         let mut hm = HM::new();
@@ -88,8 +74,24 @@ mod tests {
             (now.day(), now.month()),
             HolidayEntry::official("Main cached holiday".to_string()),
         );
-        save(&fname, &hm).expect("save cached holidays");
+        save(&path, &hm).expect("save cached holidays");
 
         run_with_args(["cal2"]).expect("invoke should succeed");
+
+        unsafe {
+            match previous_home {
+                Some(v) => env::set_var("HOME", v),
+                None => env::remove_var("HOME"),
+            }
+            match previous_data {
+                Some(v) => env::set_var("XDG_DATA_HOME", v),
+                None => env::remove_var("XDG_DATA_HOME"),
+            }
+            match previous_config {
+                Some(v) => env::set_var("XDG_CONFIG_HOME", v),
+                None => env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

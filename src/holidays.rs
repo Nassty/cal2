@@ -1,5 +1,6 @@
 use crate::{
     HM,
+    config,
     error::{CalError, Result},
 };
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,7 @@ use std::{
     collections::HashMap,
     fs::{self, File},
     io::{self, BufWriter, Write},
+    path::PathBuf,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -120,20 +122,20 @@ impl Provider {
     }
 }
 
-pub fn get_filename(year: i32, provider: &Provider) -> String {
+pub fn get_filename(year: i32, provider: &Provider) -> PathBuf {
     let basename = if provider.is_default() {
         format!("hm-{year}")
     } else {
         format!("hm-{}-{year}", provider.slug())
     };
-    shellexpand::tilde(&format!("~/.config/{basename}")).to_string()
+    config::data_dir().join(basename)
 }
 
 type LegacyHM = HashMap<(u32, u32), bool>;
 const MAX_CACHE_BYTES: u64 = 10 * 1024 * 1024;
 
-pub fn load(fname: &str) -> Result<Option<HM>> {
-    let metadata = match fs::metadata(fname) {
+pub fn load(path: &PathBuf) -> Result<Option<HM>> {
+    let metadata = match fs::metadata(path) {
         Ok(meta) => meta,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
@@ -141,11 +143,12 @@ pub fn load(fname: &str) -> Result<Option<HM>> {
 
     if metadata.len() > MAX_CACHE_BYTES {
         return Err(CalError::Cache(format!(
-            "cache {fname} exceeds {MAX_CACHE_BYTES} bytes"
+            "cache {} exceeds {MAX_CACHE_BYTES} bytes",
+            path.display()
         )));
     }
 
-    let bytes = fs::read(fname)?;
+    let bytes = fs::read(path)?;
 
     if let Ok(resp) = bincode::deserialize::<HM>(&bytes) {
         return Ok(Some(resp));
@@ -159,17 +162,22 @@ pub fn load(fname: &str) -> Result<Option<HM>> {
                 migrated.insert((day, month), HolidayEntry::custom(name));
             }
         }
-        save(fname, &migrated)?;
+        save(path, &migrated)?;
         return Ok(Some(migrated));
     }
 
     Err(CalError::Cache(format!(
-        "failed to deserialize cache {fname}"
+        "failed to deserialize cache {}",
+        path.display()
     )))
 }
 
-pub fn save(fname: &str, hm: &HM) -> Result<()> {
-    let file = File::create(fname)?;
+pub fn save(path: &PathBuf, hm: &HM) -> Result<()> {
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
     bincode::serialize_into(&mut writer, hm)?;
     writer.flush()?;
@@ -177,13 +185,13 @@ pub fn save(fname: &str, hm: &HM) -> Result<()> {
 }
 
 pub fn get_holidays(year: i32, provider: &Provider) -> Result<HM> {
-    let fname = get_filename(year, provider);
-    if let Some(hm) = load(&fname)? {
+    let path = get_filename(year, provider);
+    if let Some(hm) = load(&path)? {
         return Ok(hm);
     }
 
     let hm = provider.fetch(year)?;
-    save(&fname, &hm)?;
+    save(&path, &hm)?;
     Ok(hm)
 }
 
@@ -243,26 +251,26 @@ mod tests {
     use serial_test::serial;
     use std::{
         collections::HashMap,
+        env,
         fs::{self, File},
         io::Write,
-        path::Path,
         time::SystemTime,
     };
 
-    fn temp_file(label: &str) -> String {
-        let mut path = std::env::temp_dir();
+    fn temp_path(label: &str) -> PathBuf {
+        let mut path = env::temp_dir();
         let nanos = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .expect("time went backwards")
             .as_nanos();
         path.push(format!("cal2-{label}-{nanos}"));
-        path.to_string_lossy().into_owned()
+        path
     }
 
     #[test]
     fn load_returns_none_for_missing_file() {
-        let fname = temp_file("missing");
-        let result = load(&fname).expect("load should not error for missing file");
+        let path = temp_path("missing");
+        let result = load(&path).expect("load should not error for missing file");
         assert!(result.is_none());
     }
 
@@ -275,36 +283,36 @@ mod tests {
             HolidayEntry::official("Christmas Day".to_string()),
         );
 
-        let fname = temp_file("roundtrip");
-        save(&fname, &hm).expect("save should succeed");
-        let raw_bytes = fs::read(&fname).expect("able to read serialized data");
+        let path = temp_path("roundtrip");
+        save(&path, &hm).expect("save should succeed");
+        let raw_bytes = fs::read(&path).expect("able to read serialized data");
         let raw_result: std::result::Result<HM, _> = bincode::deserialize(&raw_bytes);
         assert!(
             raw_result.is_ok(),
             "raw deserialize failed: {:?}",
             raw_result.err()
         );
-        let loaded = load(&fname)
+        let loaded = load(&path)
             .expect("load should succeed after save")
             .expect("cache should exist after saving");
 
         assert_eq!(loaded, hm);
-        fs::remove_file(&fname).expect("able to remove temp cache");
+        fs::remove_file(&path).expect("able to remove temp cache");
     }
 
     #[test]
     fn load_migrates_legacy_boolean_cache() {
-        let legacy_fname = temp_file("legacy");
+        let path = temp_path("legacy");
         let mut legacy_map = HashMap::new();
         legacy_map.insert((1, 1), true);
         legacy_map.insert((2, 1), false);
 
         {
-            let mut file = File::create(&legacy_fname).expect("create legacy file");
+            let mut file = File::create(&path).expect("create legacy file");
             bincode::serialize_into(&mut file, &legacy_map).expect("serialize legacy cache");
         }
 
-        let raw_bytes = fs::read(&legacy_fname).expect("read legacy cache");
+        let raw_bytes = fs::read(&path).expect("read legacy cache");
         let legacy_raw: std::result::Result<LegacyHM, _> = bincode::deserialize(&raw_bytes);
         assert!(
             legacy_raw.is_ok(),
@@ -312,7 +320,7 @@ mod tests {
             legacy_raw.err()
         );
 
-        let migrated = load(&legacy_fname)
+        let migrated = load(&path)
             .expect("legacy cache should migrate")
             .expect("migrated cache should exist");
         assert_eq!(migrated.len(), 1);
@@ -326,16 +334,17 @@ mod tests {
             entry.name
         );
 
-        fs::remove_file(&legacy_fname).expect("remove migrated cache");
+        fs::remove_file(&path).expect("remove migrated cache");
     }
 
     #[test]
-    fn get_filename_places_cache_under_config_directory_for_default_provider() {
+    fn get_filename_places_cache_under_data_directory_for_default_provider() {
         let year = 2030;
-        let fname = get_filename(year, &Provider::default());
+        let path = get_filename(year, &Provider::default());
+        let path_str = path.to_string_lossy();
         assert!(
-            fname.ends_with(&format!("hm-{year}")),
-            "unexpected cache filename: {fname}"
+            path_str.ends_with(&format!("hm-{year}")),
+            "unexpected cache filename: {path_str}"
         );
     }
 
@@ -345,10 +354,11 @@ mod tests {
             country_code: "US".to_string(),
         };
         let year = 2030;
-        let fname = get_filename(year, &provider);
+        let path = get_filename(year, &provider);
+        let path_str = path.to_string_lossy();
         assert!(
-            fname.ends_with("hm-openholidays-us-2030"),
-            "unexpected cache filename: {fname}"
+            path_str.ends_with("hm-openholidays-us-2030"),
+            "unexpected cache filename: {path_str}"
         );
     }
 
@@ -383,38 +393,33 @@ mod tests {
 
     #[test]
     fn load_rejects_cache_larger_than_limit() {
-        let fname = temp_file("too-big");
-        let mut file = File::create(&fname).expect("create temp file");
+        let path = temp_path("too-big");
+        let mut file = File::create(&path).expect("create temp file");
         let oversize = vec![0_u8; (10 * 1024 * 1024) + 1];
         file.write_all(&oversize).expect("write oversize cache");
 
-        let result = load(&fname);
+        let result = load(&path);
         assert!(result.is_err(), "expected oversized cache to be rejected");
 
-        fs::remove_file(&fname).expect("remove oversize temp file");
+        fs::remove_file(&path).expect("remove oversize temp file");
     }
 
     #[test]
     #[serial]
     fn get_holidays_uses_cached_file_when_present() {
-        let mut home_dir = std::env::temp_dir();
-        home_dir.push(format!(
-            "cal2-home-{}",
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("time went backwards")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&home_dir).expect("create home dir");
-        let previous_home = std::env::var("HOME").ok();
+        let temp_dir = temp_path("home-holidays");
+        fs::create_dir_all(&temp_dir).expect("create temp dir");
+
+        let previous_data = env::var("XDG_DATA_HOME").ok();
+        let previous_home = env::var("HOME").ok();
         unsafe {
-            std::env::set_var("HOME", &home_dir);
+            env::set_var("XDG_DATA_HOME", temp_dir.join("data"));
+            env::set_var("HOME", &temp_dir);
         }
 
         let provider = Provider::default();
         let year = 2035;
-        let fname = get_filename(year, &provider);
-        let path = Path::new(&fname);
+        let path = get_filename(year, &provider);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create cache parent");
         }
@@ -424,19 +429,22 @@ mod tests {
             (2, 1),
             HolidayEntry::official("Test cached holiday".to_string()),
         );
-        save(&fname, &hm).expect("save cached map");
+        save(&path, &hm).expect("save cached map");
 
         let loaded = get_holidays(year, &provider).expect("load cached holidays");
         assert_eq!(loaded, hm);
 
-        fs::remove_file(&fname).expect("remove cached file");
         unsafe {
-            if let Some(prev) = previous_home {
-                std::env::set_var("HOME", prev);
-            } else {
-                std::env::remove_var("HOME");
+            match previous_data {
+                Some(v) => env::set_var("XDG_DATA_HOME", v),
+                None => env::remove_var("XDG_DATA_HOME"),
+            }
+            match previous_home {
+                Some(v) => env::set_var("HOME", v),
+                None => env::remove_var("HOME"),
             }
         }
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

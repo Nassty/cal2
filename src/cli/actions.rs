@@ -1,5 +1,6 @@
 use crate::HM;
-use crate::cli::{Mode, OutputFormat};
+use crate::cli::{ConfigAction, DisplayOptions, Mode, MonthRange, OutputFormat};
+use crate::config;
 use crate::display_month::DisplayMonth;
 use crate::error::Result;
 use crate::holidays::{
@@ -8,6 +9,7 @@ use crate::holidays::{
 use chrono::{DateTime, Datelike, Utc};
 use prettytable::{Cell, Row, Table, format};
 use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::iter::zip;
 
@@ -68,22 +70,102 @@ impl ActionEnvironment for RealEnvironment {
 
 pub fn display<E: ActionEnvironment>(env: &E, mode: Mode) -> Result<()> {
     let now = env.now();
+    let today = now.naive_utc().date();
+    let options = DisplayOptions {
+        highlight_today: true,
+        julian: false,
+    };
     let hm = env.holidays(now.year())?;
     let calendars: Vec<_> = match mode {
         Mode::Q => {
-            let current = DisplayMonth::new(now.month(), now.year(), &hm)?;
+            let current = DisplayMonth::new(now.month(), now.year(), &hm, options.clone(), today)?;
             vec![current.prev()?, current.clone(), current.next()?]
         }
-        Mode::Month => vec![DisplayMonth::new(now.month(), now.year(), &hm)?],
+        Mode::Month => vec![DisplayMonth::new(
+            now.month(),
+            now.year(),
+            &hm,
+            options,
+            today,
+        )?],
         Mode::Year => {
             let mut rows = Vec::with_capacity(12);
             for month in 1..=12 {
-                rows.push(DisplayMonth::new(month, now.year(), &hm)?);
+                rows.push(DisplayMonth::new(
+                    month,
+                    now.year(),
+                    &hm,
+                    options.clone(),
+                    today,
+                )?);
             }
             rows
         }
     };
 
+    let mut table = Table::new();
+    let format = format::FormatBuilder::new().padding(0, 0).build();
+    table.set_format(format);
+    let headers = calendars
+        .iter()
+        .map(|x| {
+            let mut c = Cell::new(&x.month_name);
+            c.align(format::Alignment::CENTER);
+            c
+        })
+        .collect::<Vec<_>>();
+    let bodies = calendars
+        .iter()
+        .map(|x| Cell::new(&x.format()))
+        .collect::<Vec<_>>();
+
+    zip(headers.as_slice().chunks(3), bodies.as_slice().chunks(3)).for_each(|(header, body)| {
+        table.add_row(Row::new(header.to_vec()));
+        table.add_row(Row::new(body.to_vec()));
+    });
+    env.print(&table.to_string())
+}
+
+pub fn display_range<E: ActionEnvironment>(
+    env: &E,
+    range: MonthRange,
+    options: DisplayOptions,
+) -> Result<()> {
+    let now = env.now();
+    let today = now.naive_utc().date();
+
+    // Collect all months in the range
+    let mut months: Vec<(u32, i32)> = Vec::with_capacity(range.count);
+    let mut month = range.start_month;
+    let mut year = range.start_year;
+    for _ in 0..range.count {
+        months.push((month, year));
+        month += 1;
+        if month > 12 {
+            month = 1;
+            year += 1;
+        }
+    }
+
+    // Collect all unique years and fetch holidays for each
+    let years: Vec<i32> = months.iter().map(|(_, y)| *y).collect();
+    let mut holidays_by_year: HashMap<i32, HM> = HashMap::new();
+    for y in years {
+        if !holidays_by_year.contains_key(&y) {
+            holidays_by_year.insert(y, env.holidays(y)?);
+        }
+    }
+
+    // Build DisplayMonth instances
+    let calendars: Vec<_> = months
+        .iter()
+        .map(|(m, y)| {
+            let hm = holidays_by_year.get(y).expect("holidays should exist");
+            DisplayMonth::new(*m, *y, hm, options.clone(), today)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // Format and output
     let mut table = Table::new();
     let format = format::FormatBuilder::new().padding(0, 0).build();
     table.set_format(format);
@@ -239,6 +321,44 @@ pub fn delete<E: ActionEnvironment>(env: &E, day: u32, month: u32) -> Result<()>
     env.println("OK")
 }
 
+pub fn config<E: ActionEnvironment>(env: &E, action: &ConfigAction) -> Result<()> {
+    match action {
+        ConfigAction::SetCountry { country } => {
+            // Validate the country code first
+            Provider::from_country(Some(country.clone()))?;
+
+            let mut cfg = config::load_config().unwrap_or_default();
+            cfg.default_country = Some(country.trim().to_uppercase());
+            config::save_config(&cfg)?;
+            env.println(&format!("Default country set to: {}", country.to_uppercase()))
+        }
+        ConfigAction::ClearCountry => {
+            let mut cfg = config::load_config().unwrap_or_default();
+            cfg.default_country = None;
+            config::save_config(&cfg)?;
+            env.println("Default country cleared")
+        }
+        ConfigAction::Show => {
+            let cfg = config::load_config().unwrap_or_default();
+            let config_path = config::config_file_path();
+            let data_path = config::data_dir();
+
+            let mut lines = vec![
+                format!("Config file: {}", config_path.display()),
+                format!("Data directory: {}", data_path.display()),
+            ];
+
+            if let Some(country) = &cfg.default_country {
+                lines.push(format!("Default country: {country}"));
+            } else {
+                lines.push("Default country: (not set, using built-in default)".to_string());
+            }
+
+            env.println(&lines.join("\n"))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,7 +369,6 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::fs;
-    use std::path::{Path, PathBuf};
     use std::time::SystemTime;
 
     struct TestEnvironment {
@@ -319,41 +438,6 @@ mod tests {
         fn println(&self, msg: &str) -> Result<()> {
             self.output.borrow_mut().push(format!("{msg}\n"));
             Ok(())
-        }
-    }
-
-    struct TempHome {
-        previous: Option<String>,
-        path: PathBuf,
-    }
-
-    impl TempHome {
-        fn new(label: &str) -> Self {
-            let mut path = std::env::temp_dir();
-            let nanos = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("time went backwards")
-                .as_nanos();
-            path.push(format!("cal2-home-{label}-{nanos}"));
-            fs::create_dir_all(&path).expect("create home dir");
-            let previous = std::env::var("HOME").ok();
-            unsafe {
-                std::env::set_var("HOME", &path);
-            }
-            Self { previous, path }
-        }
-    }
-
-    impl Drop for TempHome {
-        fn drop(&mut self) {
-            unsafe {
-                if let Some(prev) = &self.previous {
-                    std::env::set_var("HOME", prev);
-                } else {
-                    std::env::remove_var("HOME");
-                }
-            }
-            let _ = fs::remove_dir_all(&self.path);
         }
     }
 
@@ -564,11 +648,28 @@ mod tests {
     #[test]
     #[serial]
     fn real_environment_roundtrip_uses_cache() {
-        let _home = TempHome::new("real-env");
+        let temp_dir = {
+            let mut path = std::env::temp_dir();
+            let nanos = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos();
+            path.push(format!("cal2-home-real-env-{nanos}"));
+            fs::create_dir_all(&path).expect("create temp dir");
+            path
+        };
+
+        let previous_home = std::env::var("HOME").ok();
+        let previous_data = std::env::var("XDG_DATA_HOME").ok();
+        unsafe {
+            std::env::set_var("HOME", &temp_dir);
+            std::env::set_var("XDG_DATA_HOME", temp_dir.join("data"));
+        }
+
         let provider = Provider::default();
         let year = 2042;
-        let fname = get_filename(year, &provider);
-        if let Some(parent) = Path::new(&fname).parent() {
+        let path = get_filename(year, &provider);
+        if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create cache directory");
         }
         let mut hm = HM::new();
@@ -585,5 +686,17 @@ mod tests {
 
         env.print("noop").expect("print works");
         env.println("noop").expect("println works");
+
+        unsafe {
+            match previous_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match previous_data {
+                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+                None => std::env::remove_var("XDG_DATA_HOME"),
+            }
+        }
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

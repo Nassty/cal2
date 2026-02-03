@@ -1,5 +1,6 @@
 use crate::{
     HM,
+    cli::DisplayOptions,
     error::{CalError, Result},
 };
 use chrono::{self, Datelike, Days, Month, NaiveDate, Weekday};
@@ -14,10 +15,18 @@ pub struct DisplayMonth<'a> {
     first_day: NaiveDate,
     last_day: NaiveDate,
     hm: &'a HM,
+    options: DisplayOptions,
+    today: NaiveDate,
 }
 
 impl<'a> DisplayMonth<'a> {
-    pub fn new(month: u32, year: i32, hm: &'a HM) -> Result<Self> {
+    pub fn new(
+        month: u32,
+        year: i32,
+        hm: &'a HM,
+        options: DisplayOptions,
+        today: NaiveDate,
+    ) -> Result<Self> {
         let first_day = NaiveDate::from_ymd_opt(year, month, 1)
             .ok_or_else(|| CalError::InvalidDate(format!("invalid month {month}")))?;
         let last_day = NaiveDate::from_ymd_opt(year, month + 1, 1)
@@ -35,6 +44,8 @@ impl<'a> DisplayMonth<'a> {
             last_day,
             month_name,
             hm,
+            options,
+            today,
         })
     }
 
@@ -45,7 +56,7 @@ impl<'a> DisplayMonth<'a> {
         } else {
             self.year + 1
         };
-        Self::new(next_month, year, self.hm)
+        Self::new(next_month, year, self.hm, self.options.clone(), self.today)
     }
 
     pub fn prev(&self) -> Result<Self> {
@@ -55,11 +66,10 @@ impl<'a> DisplayMonth<'a> {
         } else {
             self.year - 1
         };
-        Self::new(prev_month, year, self.hm)
+        Self::new(prev_month, year, self.hm, self.options.clone(), self.today)
     }
 
     pub fn get_matrix(&self) -> Vec<Vec<String>> {
-        let today = chrono::Utc::now().naive_local().date();
         let mut curr_day = self.first_day;
         let first_index = self.first_day.weekday().number_from_monday();
         let weekends = [Weekday::Sat, Weekday::Sun];
@@ -78,12 +88,14 @@ impl<'a> DisplayMonth<'a> {
                 Some((cr, is_holiday))
             })
             .map(|x| match x {
-                Some((cr, _)) if cr == today => cr.day().to_string().black().on_white().to_string(),
-                Some((cr, _)) if weekends.contains(&cr.weekday()) => {
-                    cr.day().to_string().green().to_string()
+                Some((cr, _)) if self.options.highlight_today && cr == self.today => {
+                    self.day_string(cr).black().on_white().to_string()
                 }
-                Some((cr, true)) => cr.day().to_string().red().to_string(),
-                Some((cr, false)) => cr.day().to_string(),
+                Some((cr, _)) if weekends.contains(&cr.weekday()) => {
+                    self.day_string(cr).green().to_string()
+                }
+                Some((cr, true)) => self.day_string(cr).red().to_string(),
+                Some((cr, false)) => self.day_string(cr),
                 None => String::new(),
             })
             .collect::<Vec<_>>()
@@ -92,8 +104,24 @@ impl<'a> DisplayMonth<'a> {
             .collect()
     }
 
+    fn day_string(&self, date: NaiveDate) -> String {
+        if self.options.julian {
+            format!("{:3}", date.ordinal())
+        } else {
+            date.day().to_string()
+        }
+    }
+
     pub fn format(&self) -> String {
         const WEEKDAYS: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+        const WEEKDAYS_JULIAN: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+        let headers = if self.options.julian {
+            &WEEKDAYS_JULIAN
+        } else {
+            &WEEKDAYS
+        };
+
         let mut table = Table::new();
         let format = format::FormatBuilder::new()
             .column_separator(' ')
@@ -106,7 +134,7 @@ impl<'a> DisplayMonth<'a> {
             .build();
         table.set_format(format);
         table.add_row(Row::new(
-            WEEKDAYS
+            headers
                 .iter()
                 .map(|label| Cell::new(label))
                 .collect::<Vec<_>>(),
@@ -140,10 +168,22 @@ mod tests {
         }
     }
 
+    fn default_options() -> DisplayOptions {
+        DisplayOptions {
+            highlight_today: true,
+            julian: false,
+        }
+    }
+
+    fn distant_past() -> NaiveDate {
+        NaiveDate::from_ymd_opt(1900, 1, 1).expect("valid date")
+    }
+
     #[test]
     fn prev_from_january_wraps_to_december_previous_year() {
         let hm = HashMap::new();
-        let dm = DisplayMonth::new(1, 2024, &hm).expect("valid display month");
+        let dm = DisplayMonth::new(1, 2024, &hm, default_options(), distant_past())
+            .expect("valid display month");
         let prev = dm.prev().expect("previous month available");
 
         assert_eq!(prev.month, 12);
@@ -153,7 +193,8 @@ mod tests {
     #[test]
     fn next_from_december_wraps_to_january_next_year() {
         let hm = HashMap::new();
-        let dm = DisplayMonth::new(12, 2023, &hm).expect("valid display month");
+        let dm = DisplayMonth::new(12, 2023, &hm, default_options(), distant_past())
+            .expect("valid display month");
         let next = dm.next().expect("next month available");
 
         assert_eq!(next.month, 1);
@@ -168,7 +209,8 @@ mod tests {
             (6, 1),
             HolidayEntry::custom("Test custom holiday".to_string()),
         );
-        let dm = DisplayMonth::new(1, 1970, &hm).expect("valid display month");
+        let dm = DisplayMonth::new(1, 1970, &hm, default_options(), distant_past())
+            .expect("valid display month");
 
         let matrix = dm.get_matrix();
         assert_eq!(matrix.len(), 5);
@@ -207,10 +249,71 @@ mod tests {
     fn format_includes_weekday_headers() {
         let _color_guard = ColorGuard::enable();
         let hm = HashMap::new();
-        let dm = DisplayMonth::new(1, 2024, &hm).expect("valid display month");
+        let dm = DisplayMonth::new(1, 2024, &hm, default_options(), distant_past())
+            .expect("valid display month");
 
         let formatted = dm.format();
         assert!(formatted.contains("Mo"));
         assert!(formatted.contains("Su"));
+    }
+
+    #[test]
+    fn no_highlight_option_disables_today_highlight() {
+        let _color_guard = ColorGuard::enable();
+        let hm = HashMap::new();
+        let today = NaiveDate::from_ymd_opt(1970, 1, 15).expect("valid date");
+        let options = DisplayOptions {
+            highlight_today: false,
+            julian: false,
+        };
+        let dm = DisplayMonth::new(1, 1970, &hm, options, today).expect("valid display month");
+
+        let matrix = dm.get_matrix();
+        let flattened: Vec<&String> = matrix.iter().flat_map(|row| row.iter()).collect();
+        // No cell should have the on_white background (black text on white)
+        assert!(
+            !flattened.iter().any(|cell| cell.contains("\u{1b}[30m")),
+            "no today highlight expected when disabled"
+        );
+    }
+
+    #[test]
+    fn julian_option_displays_ordinal_days() {
+        let _color_guard = ColorGuard::enable();
+        let hm = HashMap::new();
+        let options = DisplayOptions {
+            highlight_today: true,
+            julian: true,
+        };
+        let dm = DisplayMonth::new(1, 1970, &hm, options, distant_past())
+            .expect("valid display month");
+
+        let matrix = dm.get_matrix();
+        let flattened: Vec<&String> = matrix.iter().flat_map(|row| row.iter()).collect();
+        // January 1 should be day 1, January 31 should be day 31
+        assert!(
+            flattened.iter().any(|cell| cell.contains("  1")),
+            "expected day 1 as ordinal"
+        );
+        assert!(
+            flattened.iter().any(|cell| cell.contains(" 31")),
+            "expected day 31 as ordinal"
+        );
+    }
+
+    #[test]
+    fn julian_format_includes_wider_headers() {
+        let _color_guard = ColorGuard::enable();
+        let hm = HashMap::new();
+        let options = DisplayOptions {
+            highlight_today: true,
+            julian: true,
+        };
+        let dm = DisplayMonth::new(1, 2024, &hm, options, distant_past())
+            .expect("valid display month");
+
+        let formatted = dm.format();
+        assert!(formatted.contains("Mon"));
+        assert!(formatted.contains("Sun"));
     }
 }
